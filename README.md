@@ -19,6 +19,10 @@ Accessibility Analyzer is a Laravel/Vue application designed to streamline acces
 
 
 ---
+## Demo Application
+
+Access the Demo application [here](https://tinyurl.com/pluro-test-demo).
+
 
 ## Localhost Deployment
 
