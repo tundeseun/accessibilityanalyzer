@@ -5,7 +5,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <title>Laravel 9 vite with vue</title>
+    <title>Pluro take-home Assessment</title>
 
 </head>
 

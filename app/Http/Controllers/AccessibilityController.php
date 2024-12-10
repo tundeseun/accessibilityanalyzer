@@ -7,148 +7,24 @@ use Symfony\Component\DomCrawler\Crawler;
 
 class AccessibilityController extends Controller
 {
+    /**
+     * Analyze uploaded HTML file for detailed accessibility issues.
+     *
+     * @param  Request  $request
+     * @return \Illuminate\Http\JsonResponse
+     */
     public function analyze(Request $request)
     {
         $request->validate([
             'file' => 'required|mimes:html,htm|max:2048',
         ]);
 
-        $file = $request->file('file');
-        $htmlContent = file_get_contents($file->getRealPath());
+        $htmlContent = file_get_contents($request->file('file')->getRealPath());
+        $crawler = new Crawler($htmlContent);
 
-        $dom = new \DOMDocument();
-        // Suppress warnings caused by invalid HTML structures
-        libxml_use_internal_errors(true);
-        $dom->loadHTML($htmlContent);
-        libxml_clear_errors();
+        $issues = $this->checkAccessibilityIssues($crawler);
 
-        $crawler = new Crawler($dom);
-        $issues = [];
-
-        // Check for missing alt attributes
-        $images = $crawler->filter('img:not([alt])');
-        foreach ($images as $img) {
-            $issues[] = [
-                'type' => 'Missing Alt Attribute',
-                'element' => $dom->saveHTML($img),
-                'suggestion' => 'Add a descriptive alt attribute to the image.',
-                'highlight' => $this->getElementXPath($img),
-            ];
-        }
-
-        // Check for skipped heading levels
-        $headings = $crawler->filter('h1, h2, h3, h4, h5, h6');
-        $prevLevel = 0;
-        foreach ($headings as $heading) {
-            $currentLevel = intval(substr($heading->nodeName, 1));
-            if ($prevLevel && $currentLevel > $prevLevel + 1) {
-                $issues[] = [
-                    'type' => 'Skipped Heading Levels',
-                    'element' => $dom->saveHTML($heading),
-                    'details' => "Skipped from h{$prevLevel} to h{$currentLevel}",
-                    'suggestion' => 'Use proper hierarchical structure for headings.',
-                    'highlight' => $this->getElementXPath($heading),
-                ];
-            }
-            $prevLevel = $currentLevel;
-        }
-
-        // Check for missing lang attribute
-        $htmlTag = $crawler->filter('html');
-        if ($htmlTag->count() && !$htmlTag->attr('lang')) {
-            $issues[] = [
-                'type' => 'Missing Language Attribute',
-                'element' => '<html>',
-                'suggestion' => 'Add a lang attribute to specify the document’s language.',
-                'highlight' => $this->getElementXPath($htmlTag),
-            ];
-        }
-
-        // Check for missing ARIA roles or landmarks
-        $landmarks = $crawler->filter('header, footer, main, nav, aside');
-        foreach ($landmarks as $landmark) {
-            if (!$landmark->hasAttribute('role')) {
-                $issues[] = [
-                    'type' => 'Missing ARIA Role',
-                    'element' => $dom->saveHTML($landmark),
-                    'suggestion' => 'Add an appropriate ARIA role to this landmark element.',
-                    'highlight' => $this->getElementXPath($landmark),
-                ];
-            }
-        }
-
-        // Check for missing ARIA attributes (aria-labelledby, aria-describedby)
-        $elementsWithAria = $crawler->filter('[aria-labelledby]:not([aria-describedby]), [aria-describedby]:not([aria-labelledby])');
-        foreach ($elementsWithAria as $element) {
-            $issues[] = [
-                'type' => 'Missing ARIA Attributes',
-                'element' => $dom->saveHTML($element),
-                'suggestion' => 'Ensure appropriate use of aria-labelledby and aria-describedby attributes.',
-                'highlight' => $this->getElementXPath($element),
-            ];
-        }
-
-        // Check for low contrast (text and background color)
-        $texts = $crawler->filter('p, h1, h2, h3, h4, h5, h6, a, span');
-        foreach ($texts as $text) {
-            $style = $text->getAttribute('style');
-            if (preg_match('/color:\s*([^;]+)/', $style, $matches)) {
-                $color = $matches[1];
-                // Check the background color if present
-                $background = $this->getBackgroundColor($text);
-                if ($background && $this->isLowContrast($color, $background)) {
-                    $issues[] = [
-                        'type' => 'Low Contrast',
-                        'element' => $dom->saveHTML($text),
-                        'suggestion' => 'Ensure there is sufficient contrast between text and background.',
-                        'highlight' => $this->getElementXPath($text),
-                    ];
-                }
-            }
-        }
-
-        // Check for missing form labels
-        $forms = $crawler->filter('input, select, textarea');
-        foreach ($forms as $form) {
-            $id = $form->getAttribute('id');
-            $label = $crawler->filter('label[for="' . $id . '"]');
-            if ($label->count() === 0) {
-                $issues[] = [
-                    'type' => 'Missing Label',
-                    'element' => $dom->saveHTML($form),
-                    'suggestion' => 'Add a label with a matching for attribute to the form element.',
-                    'highlight' => $this->getElementXPath($form),
-                ];
-            }
-        }
-
-        // Check for empty links and buttons
-        $links = $crawler->filter('a');
-        foreach ($links as $link) {
-            if (empty(trim($link->textContent))) {
-                $issues[] = [
-                    'type' => 'Empty Link',
-                    'element' => $dom->saveHTML($link),
-                    'suggestion' => 'Ensure that links have meaningful text content.',
-                    'highlight' => $this->getElementXPath($link),
-                ];
-            }
-        }
-
-        $buttons = $crawler->filter('button');
-        foreach ($buttons as $button) {
-            if (empty(trim($button->textContent))) {
-                $issues[] = [
-                    'type' => 'Empty Button',
-                    'element' => $dom->saveHTML($button),
-                    'suggestion' => 'Ensure that buttons have meaningful text content.',
-                    'highlight' => $this->getElementXPath($button),
-                ];
-            }
-        }
-
-        // Calculate compliance score
-        $complianceScore = max(0, 100 - count($issues) * 5);
+        $complianceScore = max(0, 100 - count($issues) * 2); // Deduct 2 points per issue.
 
         return response()->json([
             'compliance_score' => $complianceScore,
@@ -157,82 +33,145 @@ class AccessibilityController extends Controller
     }
 
     /**
-     * Get the XPath for a DOMNode.
+     * Check for various accessibility issues.
+     *
+     * @param  Crawler  $crawler
+     * @return array
      */
-    private function getElementXPath($element)
+    private function checkAccessibilityIssues(Crawler $crawler)
     {
-        $xpath = '';
-        while ($element) {
-            $siblingIndex = 1;
-            $sibling = $element;
-            while ($sibling = $sibling->previousSibling) {
-                if ($sibling->nodeName == $element->nodeName) {
-                    $siblingIndex++;
-                }
+        $issues = [];
+
+        $issues = array_merge($issues, $this->checkMissingAltAttributes($crawler));
+        $issues = array_merge($issues, $this->checkSkippedHeadings($crawler));
+        $issues = array_merge($issues, $this->checkMissingLangAttribute($crawler));
+        $issues = array_merge($issues, $this->checkEmptyLinksOrButtons($crawler));
+        $issues = array_merge($issues, $this->checkDuplicateIds($crawler));
+        $issues = array_merge($issues, $this->checkFormAccessibility($crawler));
+
+        return $issues;
+    }
+
+    /**
+     * Check for images missing alt attributes.
+     */
+    private function checkMissingAltAttributes(Crawler $crawler)
+    {
+        $issues = [];
+        $crawler->filter('img:not([alt])')->each(function (Crawler $node) use (&$issues) {
+            $element = $node->getNode(0);
+            $issues[] = [
+                'type' => 'Missing Alt Attribute',
+                'element' => $element->ownerDocument->saveHTML($element),
+                'suggestion' => 'Add a descriptive alt attribute to the image.',
+            ];
+        });
+        return $issues;
+    }
+
+    /**
+     * Check for skipped heading levels.
+     */
+    private function checkSkippedHeadings(Crawler $crawler)
+    {
+        $issues = [];
+        $headings = $crawler->filter('h1, h2, h3, h4, h5, h6');
+        $lastLevel = 0;
+
+        foreach ($headings as $heading) {
+            $currentLevel = intval(substr($heading->nodeName, 1));
+            if ($currentLevel > $lastLevel + 1) {
+                $issues[] = [
+                    'type' => 'Skipped Heading Level',
+                    'element' => $heading->ownerDocument->saveHTML($heading),
+                    'suggestion' => "Ensure heading levels follow a logical order.",
+                ];
             }
-            $xpath = '/' . $element->nodeName . '[' . $siblingIndex . ']' . $xpath;
-            $element = $element->parentNode;
+            $lastLevel = $currentLevel;
         }
-        return $xpath;
+        return $issues;
     }
 
     /**
-     * Calculate contrast ratio between two colors.
+     * Check for missing lang attribute on the HTML tag.
      */
-    private function calculateContrastRatio($color1, $color2)
+    private function checkMissingLangAttribute(Crawler $crawler)
     {
-        $luminance1 = $this->getLuminance($color1);
-        $luminance2 = $this->getLuminance($color2);
+        $issues = [];
+        $html = $crawler->filter('html');
 
-        $contrastRatio = ($luminance1 + 0.05) / ($luminance2 + 0.05);
-        if ($contrastRatio < 1) {
-            $contrastRatio = 1 / $contrastRatio;
+        if ($html->count() && !$html->attr('lang')) {
+            $issues[] = [
+                'type' => 'Missing Lang Attribute',
+                'element' => '<html>',
+                'suggestion' => "Add a lang attribute to the <html> tag for language identification.",
+            ];
         }
-
-        return $contrastRatio;
+        return $issues;
     }
 
     /**
-     * Get the luminance of a color.
+     * Check for empty links or buttons.
      */
-    private function getLuminance($color)
+    private function checkEmptyLinksOrButtons(Crawler $crawler)
     {
-        // Assuming color is in hex format
-        if (preg_match('/#([a-fA-F0-9]{6})/', $color, $matches)) {
-            $rgb = hexdec($matches[1]);
-            $r = (($rgb >> 16) & 0xFF) / 255;
-            $g = (($rgb >> 8) & 0xFF) / 255;
-            $b = ($rgb & 0xFF) / 255;
-
-            $r = ($r <= 0.03928) ? $r / 12.92 : pow(($r + 0.055) / 1.055, 2.4);
-            $g = ($g <= 0.03928) ? $g / 12.92 : pow(($g + 0.055) / 1.055, 2.4);
-            $b = ($b <= 0.03928) ? $b / 12.92 : pow(($b + 0.055) / 1.055, 2.4);
-
-            return 0.2126 * $r + 0.7152 * $g + 0.0722 * $b;
-        }
-        return 0;
+        $issues = [];
+        $crawler->filter('a, button')->reduce(function (Crawler $node) {
+            return trim($node->text()) === '' && !$node->attr('aria-label');
+        })->each(function (Crawler $node) use (&$issues) {
+            $element = $node->getNode(0);
+            $issues[] = [
+                'type' => 'Empty Link or Button',
+                'element' => $element->ownerDocument->saveHTML($element),
+                'suggestion' => 'Provide content or aria-label for meaningful interaction.',
+            ];
+        });
+        return $issues;
     }
 
     /**
-     * Check if the contrast between text and background is low.
+     * Check for duplicate IDs.
      */
-    private function isLowContrast($textColor, $bgColor)
+    private function checkDuplicateIds(Crawler $crawler)
     {
-        $ratio = $this->calculateContrastRatio($textColor, $bgColor);
-        return $ratio < 4.5; // WCAG 2.0 standard for normal text
+        $issues = [];
+        $ids = [];
+
+        $crawler->filter('[id]')->each(function (Crawler $node) use (&$issues, &$ids) {
+            $element = $node->getNode(0);
+            $id = $element->getAttribute('id');
+            if (isset($ids[$id])) {
+                $issues[] = [
+                    'type' => 'Duplicate ID',
+                    'element' => $element->ownerDocument->saveHTML($element),
+                    'suggestion' => "Ensure IDs are unique within the document.",
+                ];
+            }
+            $ids[$id] = true;
+        });
+
+        return $issues;
     }
 
     /**
-     * Get the background color of an element.
+     * Check for form accessibility issues (missing labels, mismatched `for` attributes).
      */
-    private function getBackgroundColor($element)
+    private function checkFormAccessibility(Crawler $crawler)
     {
-        // Here we would attempt to get the background color from inline styles or computed styles
-        // For simplicity, we will check the inline styles for background-color
-        $style = $element->getAttribute('style');
-        if (preg_match('/background-color:\s*([^;]+)/', $style, $matches)) {
-            return $matches[1];
-        }
-        return null;
+        $issues = [];
+        $crawler->filter('input:not([type="hidden"]), textarea, select')->each(function (Crawler $node) use (&$issues) {
+            $element = $node->getNode(0);
+            $id = $element->getAttribute('id');
+            $labels = $node->parents()->filter("label[for='{$id}']");
+
+            if (!$id || $labels->count() === 0) {
+                $issues[] = [
+                    'type' => 'Missing Form Label',
+                    'element' => $element->ownerDocument->saveHTML($element),
+                    'suggestion' => "Add a <label> element with a matching for attribute.",
+                ];
+            }
+        });
+        return $issues;
     }
 }
