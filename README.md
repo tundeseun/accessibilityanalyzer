@@ -24,7 +24,7 @@ Accessibility Analyzer is a Laravel/Vue application designed to streamline acces
 Access the Demo application [here](https://tinyurl.com/pluro-test-demo).
 
 
-Deployment Instructions for Laravel/Vue Application
+Deployment Instructions for Accessibility Analyzer Application
 ### Localhost Deployment
 1. **Install Prerequisites**
 Ensure the following tools are installed:
