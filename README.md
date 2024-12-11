@@ -15,7 +15,7 @@ Accessibility Analyzer is a Laravel/Vue application designed to streamline acces
 ## Documentation
 
 - [API and Vue Frontend Architecture and Scoring Logic](docs/API%20AND%20VUE%20FRONTEND%20ARCHITECTURE%20AND%20SCORING%20LOGIC.pdf)
-- [Deployment Instructions](docs/Laravel_Vue_Deployment_Instructions.pdf.pdf)
+- [Deployment Instructions](docs/Laravel_Vue_Deployment_Instructions.pdf)
 
 
 ---
